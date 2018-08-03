@@ -2,18 +2,18 @@
 package lttlru
 
 import (
-	"time"
 	"sync"
+	"time"
 
-	"github.com/pkg/errors"
 	hlru "github.com/hashicorp/golang-lru"
+	"github.com/pkg/errors"
 )
 
 // LruWithTTL lru with ttl
 type LruWithTTL struct {
 	*hlru.Cache
-	expiresAt map[interface{}]*time.Time
-	expireMutex sync.Mutex
+	expiresAt   map[interface{}]*time.Time
+	expireMutex sync.RWMutex
 }
 
 // NewTTL creates an LRU of the given size
@@ -30,7 +30,7 @@ func NewTTLWithEvict(size int, onEvicted func(key interface{}, value interface{}
 	if err != nil {
 		return nil, err
 	}
-	return &LruWithTTL{c, make(map[interface{}]*time.Time), sync.Mutex{}}, nil
+	return &LruWithTTL{c, make(map[interface{}]*time.Time), sync.RWMutex{}}, nil
 }
 
 func (lru *LruWithTTL) removeExpired(key interface{}) {
@@ -50,17 +50,23 @@ func (lru *LruWithTTL) AddWithTTL(key, value interface{}, ttl time.Duration) boo
 }
 
 func (lru *LruWithTTL) GetWithTTL(key interface{}) (interface{}, bool) {
-	if lru.expiresAt[key] != nil {
+	lru.expireMutex.RLock()
+	if _, ok := lru.expiresAt[key]; ok {
 		if lru.expiresAt[key].After(time.Now()) {
 			// ttl not expired
+			lru.expireMutex.RUnlock()
 			return lru.Get(key)
 		}
 
 		// ttl expired
+		lru.expireMutex.RUnlock()
 		lru.removeExpired(key)
+		return nil, false
+	} else {
+		// not added with ttl
+		lru.expireMutex.RUnlock()
+		return nil, false
+
 	}
 
-	// not added with ttl
-	return nil, false
 }
-
